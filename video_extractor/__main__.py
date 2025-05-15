@@ -7,19 +7,19 @@ import argparse
 
 def build_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gui", type=str, action="store_false", default=True,
-                        help="Output file name")
+    parser.add_argument("--use_cli", type=str, action="store_true", default=True,
+                        help="Use CLI")
     parser.add_argument("--video", default=None, type=str,
                         help="Video file name")
     parser.add_argument("--transform", default=None, type=str,
-                        help="Transformation information list")
+                        help="Transformation information list (.pkl file)")
     parser.add_argument("--fout", default=None, type=str,
                         help="Output file name")
     return parser
 
 
-def main(gui=None, video=None, transform=None, fout=None):
-    if gui:
+def main(use_cli=None, video=None, transform=None, fout=None):
+    if not use_cli:
         app = QApplication(sys.argv)
         window = MainWindow()
         window.show()
