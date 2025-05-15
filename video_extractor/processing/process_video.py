@@ -45,7 +45,6 @@ def parse_timestamp(frame):
         time_str = ""
         sec_str = ""
     
-    print(time_str, sec_str)
     return time_str, sec_str
 
 
@@ -237,13 +236,13 @@ class VideoReader:
                 fp.write("%s,%s\n"%(time_str, sec_str))
     
     def save_ttl(self, ttl, fname):
-        with open(fname, "w") as fp:
+        with open(fname, "w", newline='') as fp:
             csv_writer = csv.writer(fp)
             for n in range(len(ttl)):
                 csv_writer.writerow(ttl[n])
         
     def save_transform(self, prefix):
-        with open(prefix+"_trans_option.pkl", "wb", newline='') as fp:
+        with open(prefix+"_trans_option.pkl", "wb") as fp:
             pkl.dump(self.transformer_set, fp)
     
     def cache_current_transform(self, cache_type):
@@ -258,7 +257,13 @@ class VideoReader:
     def delete_cache(self, cid):
         self.transformer_set[cid] = None
         self.warped_set[cid] = None
-    
+        
+    @staticmethod
+    def load_videoreader(file_path, transform_list):
+        obj = VideoReader(file_path)
+        obj.transformer_set = transform_list
+        return obj
+
     
 def order_points(pts):
     # Convert to np array if needed
