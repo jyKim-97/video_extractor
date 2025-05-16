@@ -141,9 +141,9 @@ class VideoReader:
             if trans.M is None or trans.max_width <= 0 or trans.max_height <= 0:
                 raise ValueError("Invalid transform info")    
             
-    def export_transforminfo(self, file_path):
-        with open(file_path, "wb") as f:
-            pkl.dump(self.transformer_set, f)
+    # def export_transforminfo(self, file_path):
+    #     with open(file_path, "wb") as f:
+    #         pkl.dump(self.transformer_set, f)
     
     def export_video(self, prefix, progbar=tqdm,
                      skip_timestamp=False, skip_video=False, skip_ttl=False):
