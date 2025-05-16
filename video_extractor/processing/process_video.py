@@ -133,101 +133,101 @@ class VideoReader:
             
     def load_transforminfo(self, file_path):
         with open(file_path, "rb") as f:
-            self.transformer = pkl.load(f)
-        
-        if not isinstance(self.transformer, TransformInfo):
-            raise TypeError("Invalid transform info file")
-        
-        # Check if the transformer is valid
-        if self.transformer.M is None or self.transformer.max_width <= 0 or self.transformer.max_height <= 0:
-            raise ValueError("Invalid transform info")
+            self.transformer_set = pkl.load(f)
+            
+        for trans in self.transformer_set:
+            if not isinstance(trans, TransformInfo):
+                raise TypeError("Invalid transform info file")
+            if trans.M is None or trans.max_width <= 0 or trans.max_height <= 0:
+                raise ValueError("Invalid transform info")    
             
     def export_transforminfo(self, file_path):
         with open(file_path, "wb") as f:
             pkl.dump(self.transformer_set, f)
     
-    def export_video(self, prefix, progbar=tqdm):
+    def export_video(self, prefix, progbar=tqdm,
+                     skip_timestamp=False, skip_video=False, skip_ttl=False):
         
         frame_num = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
-        is_exist = False
-        for trans in self.transformer_set:
-            if trans is not None:
-                is_exist = True
-                break
-        if not is_exist:
-            raise ValueError("Please set the transformation information first")
+        # save transformation information
+        self.save_transform(prefix)
         
-        # open video set
+        # video output setting
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         
-        video_trans_set = []
-        cap_set = []
-        
-        ttl_trans_set = []
-        ttl_rgb_set = []
-        
-        date_trans = None
-        
-        nstack = 0
-        for trans in self.transformer_set:
+        # initialize output dataset
+        data_out = []
+        for n, trans in enumerate(self.transformer_set):
             if trans is None:
-                continue
-            if trans.type == TTL:
-                ttl_trans_set.append(trans)
-                ttl_rgb_set.append(np.zeros((frame_num, 3)))
+                data_out.append(None)
             elif trans.type == VIDEO:
-                fname = prefix + "(%d).avi"%(nstack)
-                out = cv2.VideoWriter(fname, fourcc, FPS, (trans.max_width, trans.max_height))
-                if not out.isOpened():
-                    raise ValueError("Cannot open the writable video file")
-                cap_set.append(out)
-                video_trans_set.append(trans)
-                nstack += 1
+                if skip_video:
+                    data_out.append(None)
+                else:
+                    fname = prefix + "(%d).avi"%(n)
+                    cap_out = cv2.VideoWriter(fname, fourcc, FPS, (trans.max_width, trans.max_height))
+                    if not cap_out.isOpened():
+                        raise ValueError("Cannot open the writable video file")
+                    data_out.append(cap_out)
+            elif trans.type == TTL:
+                if skip_ttl:
+                    data_out.append(None)
+                else:
+                    data_out.append(np.zeros((frame_num, 3)))
             elif trans.type == TIME:
-                if date_trans is not None:
-                    raise ValueError("More than one time frame exists")
-                date_trans = trans
-                date_set = []
-            else: 
-                raise ValueError("Unexpected type") 
+                if skip_timestamp:
+                    data_out.append(None)
+                else:
+                    data_out.append([])
+            else:
+                raise ValueError("Unexpected output type")
+            
+        # verify
+        is_exist = False
+        for dout in data_out:
+            if dout is not None:
+                is_exist = True
+        if not is_exist:
+            raise ValueError("There is no dataset to be exported")
         
+        # extract dataset
         pbar = progbar(total=int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)), desc="Exporting video")
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         for n in range(frame_num):
-            
+            # read frame
             frame = self.read_frame()
             if frame is None:
                 break
-            
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            # video
-            for cout, trans in zip(cap_set, video_trans_set):
-                warp = trans.transform(frame)
-                cout.write(warp)
-            # ttl
-            for i, trans in enumerate(ttl_trans_set):
-                warp = trans.transform(frame)
-                ttl_rgb_set[i][n] = warp.mean(axis=0).mean(axis=0)
             
-            # time value
-            warp = date_trans.transform(frame)
-            date_set.append(parse_timestamp(warp))
-                
+            for dout, trans in zip(data_out, self.transformer_set):
+                if dout is None: continue
+                else:
+                    warp = trans.transform(frame)
+                    if trans.type == VIDEO:
+                        dout.write(warp)
+                    elif trans.type == TTL:
+                        dout[n] = warp.mean(axis=0).mean(axis=0)
+                    elif trans.type == VIDEO:
+                        dout.append(parse_timestamp(warp))
+            
             pbar.update(n=1)
         
-        for cout in cap_set:
-            cout.release()
-        # export TTL
-        for i, ttl_rgb in enumerate(ttl_rgb_set):
-            fname = prefix+"_ttl(%d).csv"%(i)
-            self.save_ttl(ttl_rgb, fname)
-        # export TIME
-        self.save_datestr(date_set, prefix+"_timestamp.txt")
-        # save transform
-        self.save_transform(prefix)
-            
-        pbar.close()
+        # save dataset
+        for n, (dout, trans) in enumerate(zip(data_out, self.transformer_set)):
+            if dout is None: continue
+            else:
+                if trans.type == VIDEO:
+                    dout.release()
+                elif trans.type == TTL:
+                    fname = prefix+"_ttl(%d).csv"%(n)
+                    self.save_ttl(dout, fname)
+                elif trans.type == TIME:
+                    self.save_datestr(dout, prefix+"_timestamp(%d).txt"%(n))
+        
+        pbar.close()            
+
         return True
     
     def save_datestr(self, date_set, fname):
