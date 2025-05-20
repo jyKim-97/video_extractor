@@ -100,15 +100,18 @@ class DotLinkInteractor(QObject):
             self.generate_line(self.pos[0], (pos.x(), pos.y()))
             
     def read_pos(self, pos):
-        if MAKE_SQUARE:
-            pos0 = self.pos[0]
-            dx = pos.x() - pos0[0]
-            dy = pos.y() - pos0[1]
-            d = min(abs(dx), abs(dy))
-            xnew = int(pos0[0] + sign(dx)*d)
-            ynew = int(pos0[1] + sign(dy)*d)
-            pos.setX(xnew)
-            pos.setY(ynew)
+        try:
+            if MAKE_SQUARE:
+                pos0 = self.pos[0]
+                dx = pos.x() - pos0[0]
+                dy = pos.y() - pos0[1]
+                d = min(abs(dx), abs(dy))
+                xnew = int(pos0[0] + sign(dx)*d)
+                ynew = int(pos0[1] + sign(dy)*d)
+                pos.setX(xnew)
+                pos.setY(ynew)
+        except IndexError as e:
+            self.reset()
         return pos
             
     def generate_line(self, start_pos, end_pos):
