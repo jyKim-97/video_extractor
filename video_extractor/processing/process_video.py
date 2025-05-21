@@ -136,6 +136,7 @@ class VideoReader:
             self.transformer_set = pkl.load(f)
             
         for trans in self.transformer_set:
+            if trans is None: continue
             if not isinstance(trans, TransformInfo):
                 raise TypeError("Invalid transform info file")
             if trans.M is None or trans.max_width <= 0 or trans.max_height <= 0:
@@ -209,7 +210,7 @@ class VideoReader:
                         dout.write(warp)
                     elif trans.type == TTL:
                         dout[n] = warp.mean(axis=0).mean(axis=0)
-                    elif trans.type == VIDEO:
+                    elif trans.type == TIME:
                         dout.append(parse_timestamp(warp))
             
             pbar.update(n=1)
