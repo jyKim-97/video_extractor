@@ -1,137 +1,23 @@
 from PyQt5.QtWidgets import (
-        QGraphicsScene, QGraphicsView, QVBoxLayout, QHBoxLayout,
-        QToolButton, QLabel, QWidget, QFileDialog, QGraphicsPixmapItem,
-        QGraphicsLineItem, QMessageBox
+        QVBoxLayout, QHBoxLayout,
+        QToolButton, QLabel, QWidget, QFileDialog, QMessageBox
 )
 
-from PyQt5.QtGui import QPixmap, QImage, QFontMetrics, QPen
-from PyQt5.QtCore import Qt, QRectF, pyqtSignal
+from PyQt5.QtGui import QFontMetrics
+from PyQt5.QtCore import Qt, pyqtSignal
 
 # from ..processing import VideoReader
 from ..processing.process_video import VideoReader
-from .control_panel import ControllPanel
+from .control_panel import ControllPanel, TransformPanel
 from .utils_gui import error2messagebox, tqdm_qt
-from .custom_widgets import DraggableDot, DotLinkInteractor, ExportOptionDialog, RADIUS, set_is_square
+from .custom_widgets import ExportOptionDialog, set_is_square
+from .scene_panel import ScencePanel
 import os
 
-
-MAX_WIDTH = 1600
-MAX_HEIGHT = 1080
+from ..gui.control_panel import VIDEO, TTL, TIME
 
 
-class ScencePanel(QGraphicsView):
-    def __init__(self):
-        super().__init__()
-        self._scene = QGraphicsScene()
-        self.setScene(self._scene)
-        self.setMinimumSize(640, 480)
-        self.pen = QPen(Qt.red, 2)
-        self.rect_link = DotLinkInteractor(self)
-        self.dots = []
-        self.lines = []
-        self.clicked = False
-        self.is_rect = False
-        self.frame_size = None
-    
-    def clear_scene(self):
-        self._scene.clear()
-        
-    def update_scene(self, frame):
-        self.clear_scene()
-        
-        h, w, ch = frame.shape
-        bytes_per_line = ch * w
-        qimg = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qimg)
-        pixmap_item = QGraphicsPixmapItem(pixmap)
-        self._scene.addItem(pixmap_item)
-        
-        # resize view to fit image
-        if self.frame_size is None:
-            r1 = MAX_WIDTH/w if w > MAX_WIDTH else 1
-            r2 = MAX_HEIGHT/h if h > MAX_HEIGHT else 1
-            r = min(r1, r2)
-            
-            wr = int(w*r)
-            hr = int(wr * h/w)
-            self.setMinimumSize(wr, hr)
-            self.setMaximumSize(wr, hr)
-        
-        self.setSceneRect(QRectF(pixmap.rect()))
-        self.fitInView(pixmap_item, Qt.KeepAspectRatio)
-        
-        if self.frame_size is None:
-            self.setFixedSize(wr, hr)
-            self.frame_size = (wr, hr)
-        
-    def reset_sel(self):
-        self.clear_points()
-    
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self.is_rect = False
-            pos = self.mapToScene(event.pos())
-            
-            clicked_item = None
-            for dot in self.dots:
-                d = (dot.pos[0] - pos.x())**2 + (dot.pos[1] - pos.y())**2
-                if d < RADIUS*2:
-                    clicked_item = dot
-                    break
-                
-            if clicked_item is not None:
-                clicked_item.select_item()
-            else:
-                if len(self.dots) == 4:
-                    return
 
-                # Draw a dot
-                dot = DraggableDot(pos.x(), pos.y(), r=RADIUS)
-                dot.setPen(self.pen)
-                self._scene.addItem(dot)
-                self.dots.append(dot)
-                
-                dot2 = self.dots[-1]
-                if len(self.dots) > 1:
-                    dot1 = self.dots[-2]
-                    self.connect_dots(dot1, dot2)
-                if len(self.dots) == 4:
-                    dot1 = self.dots[0]
-                    self.connect_dots(dot1, dot2)
-                    
-        elif event.button() == Qt.RightButton:
-            self.is_rect = True
-            self.rect_link.handle_mouse_press(event)
-        
-        return super().mousePressEvent(event)
-    
-    def mouseMoveEvent(self, event):
-        if self.is_rect:
-            self.rect_link.handle_mouse_move(event)
-            super().mouseMoveEvent(event)
-
-    def connect_dots(self, dot1, dot2):
-        line = QGraphicsLineItem(dot1.pos[0], dot1.pos[1], dot2.pos[0], dot2.pos[1])
-        line.setPen(self.pen)
-        self._scene.addItem(line)
-        self.lines.append(line)
-        
-        dot1.add_connection(line, dot2)
-        dot2.add_connection(line, dot1)
-    
-    def clear_points(self):
-        for item in self.lines + self.dots:
-            self._scene.removeItem(item)
-        self.lines.clear()
-        self.dots.clear()
-        self.rect_link.reset()
-        
-    def get_points(self):
-        if self.is_rect:
-            pos = self.rect_link.get_rect()
-            return pos
-        else:
-            return [(d.pos[0], d.pos[1]) for d in self.dots]
 
 
 class VideoPanel(QWidget):
@@ -142,8 +28,8 @@ class VideoPanel(QWidget):
         super().__init__()
         self.init_ui()
         self.video_reader = None # VideoReader()
-        # self.playing = False
-        
+        self.trans_panel = None # Transformpanel
+     
     def init_ui(self):
         # entire layout
         layout = QVBoxLayout()
@@ -193,7 +79,7 @@ class VideoPanel(QWidget):
         
     def connect_controllser(self, controller: ControllPanel):
         controller.reset_selected.connect(self.reset_crop)
-        controller.add_selected.connect(self.add_crop)
+        controller.add_selected.connect(self.transform_crop)
         controller.export_selected.connect(self.export_video)
         controller.apply_selected.connect(self.apply_crop)
         controller.delete_selected.connect(self.delete_crop)
@@ -210,9 +96,28 @@ class VideoPanel(QWidget):
         self.scene_panel.reset_sel()
     
     @error2messagebox(to_warn=True)
-    def add_crop(self, add_type: int):
-        self.video_reader.cache_current_transform(add_type)
-        self.add_crop_success.emit(add_type)
+    def transform_crop(self):
+        """
+        Open new window for detailed transformation setting
+        """
+        self.trans_panel = TransformPanel(self.video_reader.get_current_frame())
+        self.trans_panel.signal_trans_update.connect(self._update_trans)
+        self.trans_panel.signal_trans_add.connect(self._add_trans)
+        self.trans_panel.show()
+        self.trans_panel.raise_()
+        self.trans_panel.activateWindow()
+        
+    def _update_trans(self, value: dict):
+        frame = self.video_reader.adjust_image(self.video_reader.get_current_frame(),
+                                               value.get("Brightness", 0),
+                                               value.get("Contrast", 1),
+                                               value.get("Histnorm", False))
+        self.trans_panel.update_scene(frame)
+    
+    def _add_trans(self, cache_type):
+        self.trans_panel.close()
+        self.video_reader.cache_current_transform(cache_type)
+        self.add_crop_success.emit(cache_type)
     
     @error2messagebox(to_warn=True)
     def export_video(self):
@@ -250,5 +155,3 @@ class VideoPanel(QWidget):
             
         self.scene_panel.clear_points()
         self.scene_panel.update_scene(frame)
-        
-        

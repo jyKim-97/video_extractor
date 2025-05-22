@@ -13,17 +13,32 @@ from ..gui.control_panel import VIDEO, TTL, TIME
 
 FPS = 25
 EXT = ".avi"
+VIDEO_OUTPUT_HEIGHT = 1000
 
 @dataclass
 class TransformInfo:
     M: np.ndarray[float]
     max_width: int
     max_height: int
+    # image quality
+    brightness: float = 0
+    contrast: float = 1
+    histeq: bool = False
     type: int = -1
     
     def transform(self, frame):
-        return cv2.warpPerspective(frame, self.M, (self.max_width, self.max_height))
+        frame = cv2.warpPerspective(frame, self.M, (self.max_width, self.max_height))
+        if self.contrast != 1 or self.brightness != 0:
+            frame = cv2.convertScaleAbs(frame, alpha=self.contrast, beta=self.brightness)
+        if self.histeq:
+            ycrcb = cv2.cvtColor(frame, cv2.COLOR_RGB2YCrCb)
+            ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+            frame = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+        return frame
     
+    # def set_default_wh(self):
+    #     self.max_width = VIDEO_OUTPUT_HEIGHT
+    #     self.max_height = VIDEO_OUTPUT_HEIGHT
     
 def parse_timestamp(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -55,6 +70,7 @@ class VideoReader:
         self.frame = None
         self.warped = None
         self.transformer = None
+        self.last_frame = None
         self.transformer_set: List[TransformInfo] = []
         self.warped_set = []
         self._open_video()
@@ -79,12 +95,28 @@ class VideoReader:
     def close(self):
         if self.cap is not None:
             self.cap.close()
+            
+    def get_transmat(self, rect, max_width=0, max_height=0):
+        # Destination rectangle
+        dst = np.array([
+            [0, 0],
+            [max_width - 1, 0],
+            [max_width - 1, max_height - 1],
+            [0, max_height - 1]
+        ], dtype="float32")
+        
+        return TransformInfo(
+            M=cv2.getPerspectiveTransform(rect, dst),
+            max_width=max_width,
+            max_height=max_height
+        )
     
     def get_warped_frame(self, pts):
         if self.frame is None:
             return None
         
         rect = order_points(pts)
+        self.rect = rect
 
         # Compute width and height of the new image
         (tl, tr, br, bl) = rect
@@ -96,40 +128,54 @@ class VideoReader:
         heightA = np.linalg.norm(tr - br)
         heightB = np.linalg.norm(tl - bl)
         max_height = int(max(heightA, heightB))
-
-        # Destination rectangle
-        dst = np.array([
-            [0, 0],
-            [max_width - 1, 0],
-            [max_width - 1, max_height - 1],
-            [0, max_height - 1]
-        ], dtype="float32")
         
         # build transform info
-        self.transformer = TransformInfo(
-            M=cv2.getPerspectiveTransform(rect, dst),
-            max_width=max_width,
-            max_height=max_height
-        )
+        self.transformer = self.get_transmat(self.rect, max_width, max_height)
 
         # Compute transform and warp
         self.warped = self.transformer.transform(self.frame)
+        self.last_frame = self.warped
         
         return self.warped
+    
+    def adjust_image(self, frame, value_bright, value_contrast, is_histnorm: bool):
+        frame_adjust = frame.copy()
+        if value_contrast != 1 or value_bright != 0:
+            frame_adjust = cv2.convertScaleAbs(frame_adjust, alpha=value_contrast, beta=value_bright)
+        if is_histnorm:
+            ycrcb = cv2.cvtColor(frame_adjust, cv2.COLOR_RGB2YCrCb)
+            ycrcb[:,:,0] = cv2.equalizeHist(ycrcb[:,:,0])
+            frame_adjust = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+        
+        self.transformer.brightness = value_bright
+        self.transformer.contrast   = value_contrast
+        self.transformer.histeq     = is_histnorm
+            
+        return frame_adjust
+    
+    # def set_transtype(self, type):
+    #     self.transformer.type =  type
+    
+    def get_original_frame(self):
+        self.warped = None
+        self.last_frame = self.frame
+        return self.frame
     
     def get_saved_warped_frame(self, cid):
         if cid >= len(self.warped_set):
             raise ValueError("Selected ID exceedes warpped image number")
+        self.last_frame = self.warped_set[cid]
         return self.warped_set[cid]
     
-    def get_original_frame(self):
-        self.warped = None
-        return self.frame
+    def get_current_frame(self):
+        if self.last_frame is None:
+            raise ValueError("Set video image first")
+        return self.last_frame
     
-    def apply_warped(self):
-        if self.warped is not None:
-            self.frame = self.warped
-            self.warped = None
+    # def apply_warped(self):
+    #     if self.warped is not None:
+    #         self.frame = self.warped
+    #         self.warped = None
             
     def load_transforminfo(self, file_path):
         with open(file_path, "rb") as f:
@@ -251,7 +297,19 @@ class VideoReader:
             raise ValueError("Transformation information is not determined. Please run apply first")
         
         self.transformer.type = cache_type
+        if cache_type == VIDEO:
+            transformer = self.get_transmat(self.rect, max_width=VIDEO_OUTPUT_HEIGHT, max_height=VIDEO_OUTPUT_HEIGHT)
+            transformer.brightness = self.transformer.brightness
+            transformer.contrast = self.transformer.contrast
+            transformer.histeq = self.transformer.histeq
+            transformer.type = self.transformer.type
+            self.transformer = transformer
+            
         self.transformer_set.append(self.transformer)
+        self.warped = self.adjust_image(self.warped, 
+                                        self.transformer.brightness,
+                                        self.transformer.contrast,
+                                        self.transformer.histeq)
         self.warped_set.append(self.warped)
         self.transformer = None
         
